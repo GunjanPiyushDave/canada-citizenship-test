@@ -81,6 +81,13 @@
   .review-incorrect-tag { color: var(--red); font-weight: 600; }
   .review-explain { font-size: 0.88rem; color: var(--muted); margin-top: 4px; margin-bottom: 8px; }
   footer { text-align: center; color: var(--muted); font-size: 0.8rem; margin-top: 20px; }
+    .jump-row { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
+.jump-label { font-size: 0.85rem; color: var(--muted); white-space: nowrap; }
+.jump-input { width: 70px; padding: 8px 10px; border: 2px solid var(--border); border-radius: 8px; font-size: 0.9rem; font-family: inherit; }
+.jump-input.input-error { border-color: var(--red); animation: shake 0.3s; }
+.jump-btn { padding: 8px 16px; font-size: 0.85rem; }
+.auto-credit-tag { font-size: 0.75rem; color: var(--amber); font-weight: 600; }
+@keyframes shake { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-4px); } 75% { transform: translateX(4px); } }
 </style>
 </head>
 <body>
@@ -103,7 +110,7 @@
       <label class="mode-option" data-mode="all">
         <div>
           <div class="mode-title">Full Exam Review — All Questions</div>
-          <div class="mode-desc">Every unique question in the bank, shuffled.</div>
+          <div class="mode-desc">Every unique question in the bank</div>
         </div>
         <input type="radio" name="mode" value="all">
       </label>
@@ -116,6 +123,11 @@
       <span class="progress-label" id="progress-label">Question 1 of 20</span>
       <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
       <span class="score-pill" id="score-pill">Score: 0/0</span>
+    </div>
+    <div class="jump-row">
+      <label for="jump-input" class="jump-label">Jump to question:</label>
+      <input type="number" id="jump-input" class="jump-input" min="1" placeholder="#">
+      <button class="btn-secondary jump-btn" onclick="jumpToQuestion()">Go</button>
     </div>
     <div class="qnum" id="qnum-label">QUESTION 1</div>
     <div class="question-text" id="question-text"></div>
@@ -200,25 +212,17 @@ document.querySelectorAll('.mode-option').forEach(el => {
 });
 document.querySelector('.mode-option[data-mode="20"]').classList.add('selected');
 
-function shuffle(array) {
-  const arr = array.slice();
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-  }
-  return arr;
-}
-
 function startQuiz() {
   const count = selectedMode === "all" ? ALL_QUESTIONS.length : Math.min(20, ALL_QUESTIONS.length);
-  const pool = shuffle(ALL_QUESTIONS).slice(0, count);
+  // Sequential slice — no shuffling of question order or answer options.
+  const pool = ALL_QUESTIONS.slice(0, count);
   quizQuestions = pool.map(q => {
-    const optionOrder = shuffle(q.options.map((opt, idx) => ({ text: opt, isCorrect: idx === q.answer })));
+    const optionOrder = q.options.map((opt, idx) => ({ text: opt, isCorrect: idx === q.answer }));
     return { q: q.q, explain: q.explain, source: q.source, options: optionOrder };
   });
   currentIndex = 0;
   score = 0;
-  userAnswers = [];
+  userAnswers = new Array(quizQuestions.length).fill(null);
   document.getElementById('start-screen').classList.remove('active');
   document.getElementById('result-screen').classList.remove('active');
   document.getElementById('quiz-screen').classList.add('active');
@@ -236,6 +240,13 @@ function renderQuestion() {
   document.getElementById('score-pill').textContent = `Score: ${score}/${currentIndex}`;
   document.getElementById('qnum-label').textContent = `QUESTION ${currentIndex + 1}`;
   document.getElementById('question-text').textContent = current.q;
+
+  const jumpInput = document.getElementById('jump-input');
+  if (jumpInput) {
+    jumpInput.max = total;
+    jumpInput.placeholder = `1-${total}`;
+    jumpInput.value = '';
+  }
 
   const container = document.getElementById('options-container');
   container.innerHTML = '';
@@ -272,14 +283,15 @@ function submitAnswer() {
   const isCorrect = chosen.isCorrect;
   if (isCorrect) score++;
 
-  userAnswers.push({
+  userAnswers[currentIndex] = {
     question: current.q,
     chosenText: chosen.text,
     isCorrect: isCorrect,
     correctText: current.options.find(o => o.isCorrect).text,
     explain: current.explain,
-    source: current.source
-  });
+    source: current.source,
+    autoCredited: false
+  };
 
   document.querySelectorAll('.option').forEach(el => {
     const idx = parseInt(el.dataset.index);
@@ -317,12 +329,67 @@ function nextQuestion() {
   }
 }
 
+// Jump directly to a question number. Every unanswered question between
+// the current position and the target is auto-credited as correct, and
+// the running score is updated to reflect those auto-credits.
+function jumpToQuestion() {
+  const input = document.getElementById('jump-input');
+  if (!input) return;
+  const total = quizQuestions.length;
+  let target = parseInt(input.value, 10);
+  if (isNaN(target) || target < 1 || target > total) {
+    input.classList.add('input-error');
+    setTimeout(() => input.classList.remove('input-error'), 800);
+    return;
+  }
+  const targetIndex = target - 1;
+
+  const upper = Math.max(targetIndex, currentIndex + (answered ? 1 : 0));
+  for (let i = currentIndex; i < upper; i++) {
+    if (userAnswers[i] === null) {
+      const q = quizQuestions[i];
+      const correctOpt = q.options.find(o => o.isCorrect);
+      userAnswers[i] = {
+        question: q.q,
+        chosenText: correctOpt.text,
+        isCorrect: true,
+        correctText: correctOpt.text,
+        explain: q.explain,
+        source: q.source,
+        autoCredited: true
+      };
+      score++;
+    }
+  }
+
+  currentIndex = targetIndex;
+  renderQuestion();
+}
+
 function showResults() {
   document.getElementById('quiz-screen').classList.remove('active');
   document.getElementById('result-screen').classList.add('active');
   document.getElementById('progress-fill').style.width = '100%';
 
   const total = quizQuestions.length;
+
+  for (let i = 0; i < total; i++) {
+    if (userAnswers[i] === null) {
+      const q = quizQuestions[i];
+      const correctOpt = q.options.find(o => o.isCorrect);
+      userAnswers[i] = {
+        question: q.q,
+        chosenText: correctOpt.text,
+        isCorrect: true,
+        correctText: correctOpt.text,
+        explain: q.explain,
+        source: q.source,
+        autoCredited: true
+      };
+      score++;
+    }
+  }
+
   document.getElementById('final-score').textContent = `${score}/${total}`;
 
   const pct = Math.round((score / total) * 100);
@@ -336,7 +403,7 @@ function showResults() {
   const reviewContainer = document.getElementById('review-container');
   reviewContainer.innerHTML = userAnswers.map((a, i) => `
     <div class="review-item">
-      <div class="review-q">${i + 1}. ${a.question}</div>
+      <div class="review-q">${i + 1}. ${a.question}${a.autoCredited ? ' <span class="auto-credit-tag">(auto-credited via jump)</span>' : ''}</div>
       <div class="review-your">Your answer: <span class="${a.isCorrect ? 'review-correct-tag' : 'review-incorrect-tag'}">${a.chosenText}</span></div>
       ${!a.isCorrect ? `<div class="review-your">Correct answer: <span class="review-correct-tag">${a.correctText}</span></div>` : ''}
       <div class="review-explain">${a.explain}</div>
